@@ -1,6 +1,18 @@
-# src/my_fastapi_proxy/proxy_fastapi.py
+# -*- encoding: utf-8 -*-
+"""
+main.py
+----
+
+@Time    :   2025/05/28 11:40:37
+@Author  :   Mattholy
+@Version :   1.0
+@Contact :   smile.used@hotmail.com
+@License :   MIT License
+"""
+
+
 import asyncio
-from typing import Any, Dict, AsyncGenerator, List, Tuple
+from typing import AsyncGenerator, AsyncIterable, List, Tuple, cast
 
 from fastapi import FastAPI, Request, WebSocket
 from starlette.responses import StreamingResponse
@@ -12,15 +24,40 @@ import websockets
 
 
 class FastProxy(FastAPI):
-    def __init__(self, base_url: str, **fastapi_kwargs: Any) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        *,
+        debug: bool = False,
+        title: str = "FastProxy",
+        description: str = "",
+        version: str = "0.1.0",
+        openapi_url: str = "/openapi.json",
+        docs_url: str = "/docs",
+        redoc_url: str = "/redoc",
+    ) -> None:
         """
         Initialize a FastProxy instance.
 
         :param base_url: The base URL of the downstream service to proxy to.
-        :param fastapi_kwargs: Additional FastAPI parameters (title, docs_url, etc.).
+        :param debug: Enable debug mode.
+        :param title: App title.
+        :param description: App description.
+        :param version: App version.
+        :param openapi_url: URL for OpenAPI schema.
+        :param docs_url: URL for Swagger UI.
+        :param redoc_url: URL for ReDoc.
         """
-        super().__init__(**fastapi_kwargs)
-        self.base_url: str = base_url.rstrip("/")
+        super().__init__(
+            debug=debug,
+            title=title,
+            description=description,
+            version=version,
+            openapi_url=openapi_url,
+            docs_url=docs_url,
+            redoc_url=redoc_url,
+        )
+        self.base_url = base_url.rstrip("/")
 
         # HTTP streaming proxy
         @self.api_route(
@@ -31,23 +68,23 @@ class FastProxy(FastAPI):
             request: Request,
             full_path: str,
         ) -> StreamingResponse:
-            target_url: str = f"{self.base_url}/{full_path}"
-            forwarded_headers: Dict[str, str] = {
+            target_url = f"{self.base_url}/{full_path}"
+            # Forward headers except host
+            forwarded_headers = {
                 k: v for k, v in request.headers.items() if k.lower() != "host"
             }
-            # Read body once before streaming
-            body: bytes = await request.body()
 
-            client: httpx.AsyncClient = httpx.AsyncClient(timeout=None)
+            client = httpx.AsyncClient(timeout=None)
+            # Stream both request body and response
             async with client.stream(
                 method=request.method,
                 url=target_url,
                 params=request.query_params,
                 headers=forwarded_headers,
-                content=body,
+                data=cast(AsyncIterable[bytes], request.stream()),  # type: ignore
             ) as resp:
-                status_code: int = resp.status_code
-                resp_headers: Dict[str, str] = {
+                status = resp.status_code
+                resp_headers = {
                     k: v
                     for k, v in resp.headers.items()
                     if k.lower() != "transfer-encoding"
@@ -62,7 +99,7 @@ class FastProxy(FastAPI):
 
                 return StreamingResponse(
                     content=stream_response(),
-                    status_code=status_code,
+                    status_code=status,
                     headers=resp_headers,
                 )
 
@@ -73,9 +110,9 @@ class FastProxy(FastAPI):
             full_path: str,
         ) -> None:
             await ws.accept()
-            scheme: str = "wss" if self.base_url.startswith("https") else "ws"
+            scheme = "wss" if self.base_url.startswith("https") else "ws"
             _, rest = self.base_url.split("://", 1)
-            target_url: str = f"{scheme}://{rest}/{full_path}"
+            target_url = f"{scheme}://{rest}/{full_path}"
             extra_headers: List[Tuple[str, str]] = [
                 (k, v) for k, v in ws.headers.items() if k.lower() != "host"
             ]
@@ -89,7 +126,7 @@ class FastProxy(FastAPI):
                         try:
                             while True:
                                 msg: Message = await ws.receive()
-                                msg_type: str = msg.get("type", "")
+                                msg_type = msg.get("type", "")
                                 if msg_type == "websocket.disconnect":
                                     break
                                 if "text" in msg:
@@ -114,6 +151,7 @@ class FastProxy(FastAPI):
                     await asyncio.gather(
                         forward_client_to_server(),
                         forward_server_to_client(),
+                        return_exceptions=True,
                     )
             except Exception:
                 await ws.close()
