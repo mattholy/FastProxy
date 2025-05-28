@@ -1,0 +1,8 @@
+{
+    "cSpell.words": [
+        "asyncio",
+        "fastproxy",
+        "httpx"
+    ],
+    "python.analysis.typeCheckingMode": "strict"
+}
